@@ -1,6 +1,3 @@
-cache/README.md
-```
-
 # Cache Package
 
 A simple file-based caching solution with expiry support for Go applications.
