@@ -5,7 +5,7 @@ A simple file-based caching solution with expiry support for Go applications.
 ## Features
 
 - **File-based storage**: Cache data is persisted to disk
-- **Fixed header**: 48-byte header for efficient metadata storage
+- **Fixed header**: 160-byte header for efficient metadata storage
 - **Expiry support**: Optional time-based expiration
 - **Thread-safe**: Mutex-based locking per cache key
 - **Generic support**: Works with any data type using Go generics
@@ -61,7 +61,7 @@ func main() {
 Retrieves cached data for the given identifier.
 
 **Parameters:**
-- `id` - The cache key identifier (max 16 characters)
+- `id` - The cache key identifier (max 128 characters)
 
 **Returns:**
 - `data` - The cached data as a slice of type T
@@ -77,7 +77,7 @@ Retrieves cached data for the given identifier.
 Stores data in the cache with an optional expiry duration.
 
 **Parameters:**
-- `id` - The cache key identifier (max 16 characters)
+- `id` - The cache key identifier (max 128 characters)
 - `data` - The data to cache (any slice type)
 - `expiry` - Duration until the cache expires. Use `0` for no expiry.
 
@@ -90,7 +90,7 @@ The `Cache` struct represents the header metadata:
 
 ```go/var/www/cache/cache_struct.go#L1-8
 type Cache struct {
-    Identifier string    // The cache key (max 16 chars)
+    Identifier string    // The cache key (max 128 chars)
     Expire     bool      // Whether the entry has expiry
     Expiry     time.Time // When the entry expires
 }
@@ -100,12 +100,12 @@ type Cache struct {
 
 Each cache file consists of:
 
-1. **Fixed 48-byte header:**
-   - Bytes 0-15: Identifier (up to 16 characters)
-   - Byte 16: Expire flag (0 or 1)
-   - Bytes 17-40: Expiry timestamp (time.Time)
-   - Bytes 41-44: Identifier length
-   - Bytes 45-47: Padding
+1. **Fixed 160-byte header:**
+   - Bytes 0-127: Identifier (up to 128 characters)
+   - Byte 128: Expire flag (0 or 1)
+   - Bytes 129-152: Expiry timestamp (time.Time)
+   - Bytes 153-156: Identifier length
+   - Bytes 157-159: Padding
 
 2. **Gob-encoded data:** The remaining bytes contain the cached data encoded using Go's `encoding/gob` package.
 
@@ -115,7 +115,7 @@ The package uses per-key mutex locks to ensure thread-safe access. Each unique c
 
 ## Limitations
 
-- Maximum identifier length: 16 characters
+- Maximum identifier length: 128 characters
 - Data must be sliceable (use `[]T` for single items)
 - Identifier must be unique within the cache directory
 
