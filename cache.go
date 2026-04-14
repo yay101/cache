@@ -43,13 +43,13 @@ var locks = make(map[string]*sync.Mutex)
 //   - id: The cache key identifier
 //
 // Returns:
-//   - data: The cached data as a slice of type T
+//   - data: The cached data of type T
 //   - ok: true if data was found and is not expired, false otherwise
 //
 // The function checks the header for:
 //   - Valid identifier match
 //   - Expiry time (removes expired files and returns false)
-func Get[T any](id string) (data []T, ok bool) {
+func Get[T any](id string) (data T, ok bool) {
 	// Initialize lock for this identifier if it doesn't exist
 	if locks[id] == nil {
 		locks[id] = &sync.Mutex{}
@@ -60,7 +60,7 @@ func Get[T any](id string) (data []T, ok bool) {
 	// Open the cache file for reading
 	file, err := os.OpenFile(path.Join(Location, id), os.O_RDONLY, 0644)
 	if err != nil {
-		return nil, false
+		return data, false
 	}
 	defer file.Close()
 
@@ -68,7 +68,7 @@ func Get[T any](id string) (data []T, ok bool) {
 	header := make([]byte, headerSize)
 	_, err = file.Read(header)
 	if err != nil {
-		return nil, false
+		return data, false
 	}
 
 	// Extract identifier from bytes 0-127
@@ -83,7 +83,7 @@ func Get[T any](id string) (data []T, ok bool) {
 
 	// Verify the identifier matches
 	if storedID != id {
-		return nil, false
+		return data, false
 	}
 
 	// Extract expire flag from byte 128
@@ -98,13 +98,13 @@ func Get[T any](id string) (data []T, ok bool) {
 	// Check if the cache has expired
 	if expire && expiry.Before(time.Now()) {
 		os.Remove(path.Join(Location, id))
-		return nil, false
+		return data, false
 	}
 
 	// Decode the remaining data using gob
 	err = gob.NewDecoder(file).Decode(&data)
 	if err != nil {
-		return nil, false
+		return data, false
 	}
 
 	return data, true
@@ -115,7 +115,7 @@ func Get[T any](id string) (data []T, ok bool) {
 //
 // Parameters:
 //   - id: The cache key identifier (max 128 characters)
-//   - data: The data to cache (any slice type)
+//   - data: The data to cache (any type)
 //   - expiry: Duration until the cache expires. Use 0 for no expiry.
 //
 // Returns:
@@ -124,7 +124,7 @@ func Get[T any](id string) (data []T, ok bool) {
 // The file format is:
 //   - Bytes 0-159: Fixed header
 //   - Bytes 160+: Gob-encoded data
-func Set[T any](id string, data []T, expiry time.Duration) (ok bool) {
+func Set[T any](id string, data T, expiry time.Duration) (ok bool) {
 	// Initialize lock for this identifier if it doesn't exist
 	if locks[id] == nil {
 		locks[id] = &sync.Mutex{}

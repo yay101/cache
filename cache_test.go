@@ -8,7 +8,6 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// Set up temp directory for tests
 	tmpDir, err := os.MkdirTemp("", "cache_test")
 	if err != nil {
 		panic("Failed to create temp dir")
@@ -21,16 +20,33 @@ func TestMain(m *testing.M) {
 
 func TestSetAndGet(t *testing.T) {
 	id := "test_key"
-	data := []string{"item1", "item2", "item3"}
+	data := "hello"
 
-	// Test Set
 	ok := Set(id, data, time.Hour)
 	if !ok {
 		t.Fatal("Set failed")
 	}
 
-	// Test Get
 	result, found := Get[string](id)
+	if !found {
+		t.Fatal("Get failed to find the key")
+	}
+
+	if result != data {
+		t.Fatalf("Expected %s, got %s", data, result)
+	}
+}
+
+func TestSetAndGetSlice(t *testing.T) {
+	id := "test_slice"
+	data := []string{"item1", "item2", "item3"}
+
+	ok := Set(id, data, time.Hour)
+	if !ok {
+		t.Fatal("Set failed")
+	}
+
+	result, found := Get[[]string](id)
 	if !found {
 		t.Fatal("Get failed to find the key")
 	}
@@ -55,21 +71,18 @@ func TestGetNonExistent(t *testing.T) {
 
 func TestExpiry(t *testing.T) {
 	id := "expiry_test"
-	data := []int{1, 2, 3}
+	data := 42
 
-	// Set with very short expiry (already expired)
 	ok := Set(id, data, -time.Hour)
 	if !ok {
 		t.Fatal("Set failed")
 	}
 
-	// Try to get expired data - should return false
 	_, found := Get[int](id)
 	if found {
 		t.Fatal("Expected expired key to not be found")
 	}
 
-	// File should have been removed
 	filePath := filepath.Join(Location, id)
 	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
 		t.Error("Expected file to be removed after expiry")
@@ -78,18 +91,16 @@ func TestExpiry(t *testing.T) {
 
 func TestConcurrentAccess(t *testing.T) {
 	id := "concurrent_test"
-	data := []string{"concurrent"}
+	data := "concurrent"
 
-	// Set first
 	Set(id, data, time.Hour)
 
-	// Multiple gets should work
 	for i := 0; i < 10; i++ {
 		result, found := Get[string](id)
 		if !found {
 			t.Fatalf("Get failed on iteration %d", i)
 		}
-		if len(result) != 1 || result[0] != "concurrent" {
+		if result != data {
 			t.Errorf("Unexpected data on iteration %d", i)
 		}
 	}
