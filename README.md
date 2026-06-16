@@ -5,6 +5,7 @@ A simple file-based caching solution with expiry support for Go applications.
 ## Features
 
 - **File-based storage**: Cache data is persisted to disk
+- **Stream-based API**: Read/write from any `io.Reader`/`io.Writer`
 - **Fixed header**: 160-byte header for efficient metadata storage
 - **Expiry support**: Optional time-based expiration
 - **Thread-safe**: Mutex-based locking per cache key
@@ -84,6 +85,35 @@ Stores data in the cache with an optional expiry duration.
 **Returns:**
 - `ok` - true if the data was successfully stored, false on error
 
+#### GetReader[T any](r io.Reader, id string) (data T, ok bool)
+
+Reads cache data from any `io.Reader` using the cache header format.
+
+**Parameters:**
+- `r` - The reader to read from
+- `id` - The expected identifier to validate against
+
+**Returns:**
+- `data` - The cached data of type T
+- `ok` - true if data was successfully read and not expired
+
+**Use cases:** in-memory buffers, network connections, compressed streams, HTTP bodies, etc.
+
+#### SetWriter[T any](w io.Writer, id string, data T, expiry time.Duration) (ok bool)
+
+Writes cache data to any `io.Writer` using the cache header format.
+
+**Parameters:**
+- `w` - The writer to write to
+- `id` - The cache key identifier (max 128 characters)
+- `data` - The data to cache
+- `expiry` - Duration until the cache expires. Use `0` for no expiry.
+
+**Returns:**
+- `ok` - true if the data was successfully written, false on error
+
+**Use cases:** in-memory buffers, network connections, compressed streams, HTTP responses, etc.
+
 ### Cache Struct
 
 The `Cache` struct represents the header metadata:
@@ -109,9 +139,44 @@ Each cache file consists of:
 
 2. **Gob-encoded data:** The remaining bytes contain the cached data encoded using Go's `encoding/gob` package.
 
+## Stream Example
+
+```go
+package main
+
+import (
+    "bytes"
+    "time"
+    "github.com/yourusername/cache"
+)
+
+type Session struct {
+    UserID string
+    Token  string
+}
+
+func main() {
+    var buf bytes.Buffer
+
+    // Write to any writer
+    ok := cache.SetWriter(&buf, "session:abc", Session{
+        UserID: "user-1",
+        Token:  "xyz",
+    }, time.Hour)
+
+    // Read from any reader
+    sess, found := cache.GetReader[Session](&buf, "session:abc")
+    if found {
+        println(sess.UserID, sess.Token)
+    }
+}
+```
+
 ## Thread Safety
 
 The package uses per-key mutex locks to ensure thread-safe access. Each unique cache identifier has its own lock, allowing concurrent access to different keys while serializing access to the same key.
+
+The `GetReader`/`SetWriter` stream functions do not perform file-based locking and are intended for use with callers' own synchronization when needed.
 
 ## Limitations
 

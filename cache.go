@@ -5,6 +5,7 @@ package cache
 import (
 	"encoding/binary"
 	"encoding/gob"
+	"io"
 	"os"
 	"path"
 	"sync"
@@ -64,9 +65,29 @@ func Get[T any](id string) (data T, ok bool) {
 	}
 	defer file.Close()
 
+	return readCache[T](file, id, true)
+}
+
+// GetReader retrieves cached data from any io.Reader using the cache header format.
+// It does not perform file-based expiry cleanup or locking.
+//
+// Parameters:
+//   - r: The reader to read from (must support the cache header format)
+//   - id: The expected identifier to validate against
+//
+// Returns:
+//   - data: The cached data of type T
+//   - ok: true if data was successfully read and not expired, false otherwise
+func GetReader[T any](r io.Reader, id string) (data T, ok bool) {
+	return readCache[T](r, id, false)
+}
+
+// readCache reads a cache entry from any io.Reader.
+// If removeExpired is true, expired files will be deleted from disk.
+func readCache[T any](r io.Reader, id string, removeExpired bool) (data T, ok bool) {
 	// Read the fixed header
 	header := make([]byte, headerSize)
-	_, err = file.Read(header)
+	_, err := io.ReadFull(r, header)
 	if err != nil {
 		return data, false
 	}
@@ -90,19 +111,20 @@ func Get[T any](id string) (data T, ok bool) {
 	expire := header[128] == 1
 
 	// Extract expiry timestamp from bytes 129-152
-	// time.Time layout: sec (int64) + nsec (int32) + loc (pointer)
 	sec := int64(binary.LittleEndian.Uint64(header[129:137]))
 	nsec := int32(binary.LittleEndian.Uint32(header[137:141]))
 	expiry := time.Unix(sec, int64(nsec))
 
 	// Check if the cache has expired
 	if expire && expiry.Before(time.Now()) {
-		os.Remove(path.Join(Location, id))
+		if removeExpired {
+			os.Remove(path.Join(Location, id))
+		}
 		return data, false
 	}
 
 	// Decode the remaining data using gob
-	err = gob.NewDecoder(file).Decode(&data)
+	err = gob.NewDecoder(r).Decode(&data)
 	if err != nil {
 		return data, false
 	}
@@ -132,6 +154,33 @@ func Set[T any](id string, data T, expiry time.Duration) (ok bool) {
 	locks[id].Lock()
 	defer locks[id].Unlock()
 
+	// Open or create the cache file
+	file, err := os.OpenFile(path.Join(Location, id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	return writeCache(file, id, data, expiry)
+}
+
+// SetWriter stores cache data to any io.Writer using the cache header format.
+// It does not perform file-based locking.
+//
+// Parameters:
+//   - w: The writer to write to
+//   - id: The cache key identifier (max 128 characters)
+//   - data: The data to cache (any type)
+//   - expiry: Duration until the cache expires. Use 0 for no expiry.
+//
+// Returns:
+//   - ok: true if the data was successfully written, false on error
+func SetWriter[T any](w io.Writer, id string, data T, expiry time.Duration) (ok bool) {
+	return writeCache(w, id, data, expiry)
+}
+
+// writeCache writes a cache entry to any io.Writer.
+func writeCache[T any](w io.Writer, id string, data T, expiry time.Duration) bool {
 	// Create the fixed header
 	header := make([]byte, headerSize)
 
@@ -149,35 +198,24 @@ func Set[T any](id string, data T, expiry time.Duration) (ok bool) {
 	}
 
 	// Bytes 129-152: Store expiry timestamp
-	// Calculate expiry time and extract seconds and nanoseconds
 	expiryTime := time.Now().Add(expiry)
 	sec := expiryTime.Unix()
 	nsec := expiryTime.Nanosecond()
 
-	// Write sec (int64) to bytes 129-136
 	binary.LittleEndian.PutUint64(header[129:137], uint64(sec))
-	// Write nsec (int32) to bytes 137-140
 	binary.LittleEndian.PutUint32(header[137:141], uint32(nsec))
-	// loc pointer is left as nil (0) for UTC
 
 	// Bytes 153-156: Store identifier length
 	binary.LittleEndian.PutUint32(header[153:157], uint32(idLen))
 
-	// Open or create the cache file
-	file, err := os.OpenFile(path.Join(Location, id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return false
-	}
-	defer file.Close()
-
 	// Write the fixed header
-	_, err = file.Write(header)
+	_, err := w.Write(header)
 	if err != nil {
 		return false
 	}
 
 	// Encode and write the data using gob
-	err = gob.NewEncoder(file).Encode(data)
+	err = gob.NewEncoder(w).Encode(data)
 	if err != nil {
 		return false
 	}
