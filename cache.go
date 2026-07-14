@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -37,6 +38,9 @@ var Location string
 // locks maps cache identifiers to their corresponding mutex for thread-safe access.
 var locks = make(map[string]*sync.Mutex)
 
+// locksMu protects the locks map itself.
+var locksMu sync.Mutex
+
 // Get retrieves cached data for the given identifier.
 // It uses a fixed 160-byte header to store metadata.
 //
@@ -52,11 +56,14 @@ var locks = make(map[string]*sync.Mutex)
 //   - Expiry time (removes expired files and returns false)
 func Get[T any](id string) (data T, ok bool) {
 	// Initialize lock for this identifier if it doesn't exist
+	locksMu.Lock()
 	if locks[id] == nil {
 		locks[id] = &sync.Mutex{}
 	}
-	locks[id].Lock()
-	defer locks[id].Unlock()
+	mu := locks[id]
+	locksMu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 
 	// Open the cache file for reading
 	file, err := os.OpenFile(path.Join(Location, id), os.O_RDONLY, 0644)
@@ -148,11 +155,14 @@ func readCache[T any](r io.Reader, id string, removeExpired bool) (data T, ok bo
 //   - Bytes 160+: Gob-encoded data
 func Set[T any](id string, data T, expiry time.Duration) (ok bool) {
 	// Initialize lock for this identifier if it doesn't exist
+	locksMu.Lock()
 	if locks[id] == nil {
 		locks[id] = &sync.Mutex{}
 	}
-	locks[id].Lock()
-	defer locks[id].Unlock()
+	mu := locks[id]
+	locksMu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 
 	// Open or create the cache file
 	file, err := os.OpenFile(path.Join(Location, id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
@@ -221,4 +231,71 @@ func writeCache[T any](w io.Writer, id string, data T, expiry time.Duration) boo
 	}
 
 	return true
+}
+
+// scanExpired scans the cache directory and removes any entries that have expired.
+// It uses a per-file lock to avoid racing with Get/Set on the same identifier.
+func scanExpired() {
+	entries, err := os.ReadDir(Location)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		id := entry.Name()
+
+		// Acquire the per-identifier lock, creating it if needed.
+		locksMu.Lock()
+		if locks[id] == nil {
+			locks[id] = &sync.Mutex{}
+		}
+		mu := locks[id]
+		locksMu.Unlock()
+		mu.Lock()
+
+		file, err := os.OpenFile(filepath.Join(Location, id), os.O_RDONLY, 0644)
+		if err != nil {
+			mu.Unlock()
+			continue
+		}
+
+		header := make([]byte, headerSize)
+		_, err = io.ReadFull(file, header)
+		file.Close()
+		mu.Unlock()
+		if err != nil {
+			continue
+		}
+
+		expire := header[128] == 1
+		if !expire {
+			continue
+		}
+
+		sec := int64(binary.LittleEndian.Uint64(header[129:137]))
+		nsec := int32(binary.LittleEndian.Uint32(header[137:141]))
+		expiry := time.Unix(sec, int64(nsec))
+
+		if expiry.Before(time.Now()) {
+			// Re-acquire lock for removal to avoid racing with Get.
+			mu.Lock()
+			os.Remove(filepath.Join(Location, id))
+			mu.Unlock()
+		}
+	}
+}
+
+// Reaper starts a background goroutine that scans the cache directory every
+// minute and deletes expired entries. It returns immediately and runs for
+// the lifetime of the process. It should be called after Location is set.
+func Reaper() {
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			scanExpired()
+		}
+	}()
 }
